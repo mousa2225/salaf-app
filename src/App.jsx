@@ -61,19 +61,105 @@ export default function App() {
   }
 
   if (!user) return <Login />;
-  if (!userProfile) return <ProfileMissing email={user.email} />;
+  if (!userProfile) return <ProfileMissing user={user} />;
   return <MainApp user={userProfile} />;
 }
 
-function ProfileMissing({ email }) {
+function ProfileMissing({ user }) {
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState('');
+
+  const createMyOrg = async () => {
+    setError('');
+    setCreating(true);
+    try {
+      const uid = user.uid;
+      const email = user.email;
+      const orgId = uid;
+      const name = email.split('@')[0];
+
+      // Create org meta
+      await setDoc(doc(db, 'orgs', orgId, 'meta', 'info'), {
+        ownerUid: uid,
+        ownerEmail: email,
+        ownerName: name,
+        name: 'منشأتي',
+        createdAt: new Date().toISOString(),
+      });
+
+      // Create userOrgMap entry (this makes me admin)
+      const ADMIN_PERMS = [
+        'VIEW_DASHBOARD', 'VIEW_EMPLOYEES', 'ADD_EMPLOYEE', 'EDIT_EMPLOYEE',
+        'DELETE_EMPLOYEE', 'IMPORT_EMPLOYEES', 'VIEW_ADVANCES', 'ADD_ADVANCE',
+        'EDIT_ADVANCE', 'DELETE_ADVANCE', 'VIEW_DEDUCTIONS', 'ADD_DEDUCTION',
+        'EDIT_DEDUCTION', 'DELETE_DEDUCTION', 'IMPORT_DEDUCTIONS', 'VIEW_STATEMENT',
+        'VIEW_REPORTS', 'EXPORT_DATA', 'MANAGE_USERS', 'MANAGE_SETTINGS',
+      ];
+
+      await setDoc(doc(db, 'userOrgMap', uid), {
+        orgId,
+        role: 'admin',
+        permissions: ADMIN_PERMS,
+        displayName: name,
+        email,
+        isAdmin: true,
+        createdAt: new Date().toISOString(),
+      });
+
+      // Create member entry
+      await setDoc(doc(db, 'orgs', orgId, 'members', uid), {
+        uid,
+        email,
+        displayName: name,
+        role: 'admin',
+        permissions: ADMIN_PERMS,
+        isAdmin: true,
+        createdAt: new Date().toISOString(),
+      });
+
+      // Reload to apply
+      window.location.reload();
+    } catch (e) {
+      console.error('Create org failed:', e);
+      setError(e.message || 'فشل إنشاء المنشأة. تأكد من قواعد Firestore.');
+      setCreating(false);
+    }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
-      <div className="card rounded-lg p-7 max-w-md w-full text-center">
-        <h2 className="display text-xl font-bold ink mb-3">حساب غير مكتمل</h2>
-        <p className="ink-muted text-sm mb-5">
-          البريد <span className="font-semibold">{email}</span> سجّل دخول لكن ليس له ملف في النظام.
+      <div className="card rounded-lg p-7 max-w-md w-full">
+        <h2 className="display text-xl font-bold ink mb-3 text-center">إعداد حسابك لأول مرة</h2>
+        <p className="ink-muted text-sm mb-5 text-center">
+          مرحباً <span className="font-semibold ink">{user.email}</span>
+          <br />
+          حسابك موجود في النظام، لكن نحتاج ننشئ منشأتك الخاصة.
         </p>
-        <button onClick={() => signOut(auth)} className="btn-primary px-5 py-2 rounded-md text-sm">تسجيل خروج</button>
+
+        <div className="p-3 rounded-md text-sm mb-5" style={{ background: '#FCF8EC', color: '#B45309' }}>
+          ⚡ بالضغط على الزر بالأسفل، تصير أنت <strong>أدمن المنشأة</strong> وتفتح لك كل الصلاحيات.
+        </div>
+
+        {error && (
+          <div className="p-3 rounded-md text-sm mb-4" style={{ background: '#FBF4F1', color: '#8B2635' }}>
+            ❌ {error}
+          </div>
+        )}
+
+        <button
+          onClick={createMyOrg}
+          disabled={creating}
+          className="btn-primary w-full py-2.5 rounded-md text-sm font-medium mb-2"
+        >
+          {creating ? '⏳ جاري الإنشاء...' : '🚀 إنشاء منشأتي وتفعيل حسابي'}
+        </button>
+
+        <button
+          onClick={() => signOut(auth)}
+          className="btn-ghost w-full py-2 rounded-md text-sm"
+        >
+          تسجيل خروج
+        </button>
       </div>
     </div>
   );
