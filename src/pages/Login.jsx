@@ -77,33 +77,8 @@ export default function Login() {
       try { await deleteDoc(doc(db, 'invitations', invitationData.invId || emailLower)); }
       catch { /* ignore */ }
     } else {
-      // 4) No invitation -> this user becomes admin of their own new org
-      const orgId = uid; // org id = user's uid
-      await setDoc(doc(db, 'orgs', orgId, 'meta', 'info'), {
-        ownerUid: uid,
-        ownerEmail: emailLower,
-        ownerName: displayName.trim(),
-        name: 'منشأتي',
-        createdAt: new Date().toISOString(),
-      });
-      await setDoc(doc(db, 'userOrgMap', uid), {
-        orgId,
-        role: 'admin',
-        permissions: ADMIN_PERMISSIONS,
-        displayName: displayName.trim(),
-        email: emailLower,
-        isAdmin: true,
-        createdAt: new Date().toISOString(),
-      });
-      await setDoc(doc(db, 'orgs', orgId, 'members', uid), {
-        uid,
-        email: emailLower,
-        displayName: displayName.trim(),
-        role: 'admin',
-        permissions: ADMIN_PERMISSIONS,
-        isAdmin: true,
-        createdAt: new Date().toISOString(),
-      });
+      // 4) No invitation -> REJECT the signup
+      throw new Error('NO_INVITATION');
     }
   };
 
@@ -115,6 +90,17 @@ export default function Login() {
       if (mode === 'signin') await handleSignIn();
       else await handleSignUp();
     } catch (err) {
+      // Special case: no invitation
+      if (err.message === 'NO_INVITATION') {
+        // Delete the auth account that was just created (since they shouldn't be in the system)
+        try {
+          if (auth.currentUser) await auth.currentUser.delete();
+        } catch { /* ignore */ }
+        setError('🚫 لا يمكن إنشاء حساب بهذا البريد. يجب أن يدعوك الأدمن أولاً. تواصل مع مدير النظام.');
+        setLoading(false);
+        return;
+      }
+
       const code = err.code || '';
       const messages = {
         'auth/invalid-email': 'البريد الإلكتروني غير صحيح',
