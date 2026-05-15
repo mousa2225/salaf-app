@@ -2,12 +2,56 @@
 @tailwind components;
 @tailwind utilities;
 
+@import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;900&family=Amiri:wght@400;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
 body {
   margin: 0;
+  font-family: 'Tajawal', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  background: #F7F3E9;
 }
 
-#root {
-  min-height: 100vh;
+.num { font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
+.display { font-family: 'Amiri', 'Tajawal', serif; }
+.card { background: #FFFEF9; border: 1px solid #E8DFC8; }
+.btn-primary { background: #1F4D3F; color: #F7F3E9; transition: background .15s; }
+.btn-primary:hover { background: #163528; }
+.btn-primary:disabled { opacity: .6; cursor: not-allowed; }
+.btn-secondary { background: #FFFEF9; color: #1F4D3F; border: 1px solid #1F4D3F; transition: background .15s; }
+.btn-secondary:hover { background: #F7F3E9; }
+.btn-danger { background: #8B2635; color: #F7F3E9; transition: background .15s; }
+.btn-danger:hover { background: #6e1c28; }
+.btn-ghost { background: transparent; color: #57534e; transition: background .15s; }
+.btn-ghost:hover { background: #EFE9D8; }
+.ink { color: #1C1917; }
+.ink-muted { color: #78716C; }
+.accent-emerald { color: #1F4D3F; }
+.accent-burgundy { color: #8B2635; }
+.accent-amber { color: #B45309; }
+.accent-blue { color: #1E40AF; }
+.divider { border-color: #E8DFC8; }
+input, select, textarea { font-family: inherit; }
+.input-base {
+  background: #FFFEF9; border: 1px solid #D6CBA8; padding: 0.65rem 0.85rem;
+  border-radius: 6px; width: 100%; color: #1C1917; outline: none;
+  transition: border-color .15s, box-shadow .15s;
 }
+.input-base:focus { border-color: #1F4D3F; box-shadow: 0 0 0 3px rgba(31,77,63,0.1); }
+.input-base:disabled { background: #F4F0E3; cursor: not-allowed; }
+.tab-pill { transition: all .15s; }
+.tab-pill.active { background: #1C1917; color: #F7F3E9; }
+.tab-pill:not(.active):hover { background: #EFE9D8; }
+.row-hover:hover { background: #FCF8EC; }
+.badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+.badge-emerald { background: #DCFCE7; color: #1F4D3F; }
+.badge-burgundy { background: #FEE4E4; color: #8B2635; }
+.badge-amber { background: #FEF3C7; color: #B45309; }
+.badge-blue { background: #DBEAFE; color: #1E40AF; }
+.badge-gray { background: #E5E7EB; color: #374151; }
+
+@keyframes slideUp { from { opacity: 0; transform: translateY(20px);} to { opacity:1; transform: none;} }
+.toast { animation: slideUp .25s ease-out; }
+@keyframes fadeIn { from { opacity: 0;} to { opacity: 1;} }
+.modal-overlay { animation: fadeIn .15s; }
+@keyframes scaleIn { from { opacity:0; transform: scale(.95);} to { opacity:1; transform: scale(1);} }
+.modal-content { animation: scaleIn .2s ease-out; }

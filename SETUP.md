@@ -1,188 +1,197 @@
-# 📒 دفتر السلف - دليل الإعداد والنشر
+# 🚀 دفتر السلف Pro - تعليمات الترقية
 
-نظام إدارة سلف الموظفين مع تخزين سحابي (Firebase) ونشر مجاني (GitHub Pages).
+## ⚠️ مهم قبل البداية
 
----
-
-## 📋 ما تحتاجه قبل البدء
-
-1. **حساب Google** (لـ Firebase)
-2. **حساب GitHub** ([github.com](https://github.com))
-3. **Node.js** على جهازك ([nodejs.org](https://nodejs.org) - حمّل LTS)
-4. **Git** ([git-scm.com](https://git-scm.com))
+هذه نسخة **Pro جديدة كلياً** بإعادة بناء كامل. لازم:
+1. تطبق قواعد أمان Firestore الجديدة (راح أعطيك إياها بالأسفل)
+2. ترفع الملفات الجديدة بدل القديمة
 
 ---
 
-## 🔥 الخطوة 1: إعداد Firebase
+## 📂 الملفات الجديدة كاملة
 
-### 1.1 إنشاء المشروع
+```
+salaf-pro/
+├── .github/
+│   └── workflows/
+│       └── deploy.yml          ⭐ نفس القديم
+├── .gitignore
+├── index.html
+├── package.json                ⭐ مكتبات جديدة (recharts)
+├── postcss.config.js
+├── tailwind.config.js
+├── vite.config.js
+└── src/
+    ├── App.jsx                 ⭐⭐⭐ الـ root الجديد
+    ├── firebase.js
+    ├── index.css
+    ├── main.jsx
+    ├── components/
+    │   ├── Layout.jsx          ⭐ شريط جانبي مع صلاحيات
+    │   ├── Modal.jsx
+    │   └── Toast.jsx
+    ├── lib/
+    │   └── utils.js            ⭐⭐⭐ كل الـ helpers
+    └── pages/
+        ├── Login.jsx           ⭐ تسجيل دخول وحساب جديد
+        ├── Dashboard.jsx       ⭐ KPIs + رسم بياني
+        ├── Employees.jsx       ⭐ موظفين متقدم (راتب، قسم)
+        ├── Advances.jsx        ⭐ سلف بأقساط تلقائية
+        ├── Deductions.jsx      ⭐ خصومات + جدول أقساط
+        ├── Statement.jsx       ⭐ كشف حساب مع جدول أقساط
+        ├── Reports.jsx         ⭐⭐ تقارير شاملة بالرسوم
+        └── Users.jsx           ⭐⭐ إدارة المستخدمين والصلاحيات
+```
 
-1. روح [console.firebase.google.com](https://console.firebase.google.com)
-2. اضغط **Add project** → سمّه (مثلاً: `salaf-app`) → التالي → تجاهل Analytics → Create
-3. لما يخلص، اضغط على أيقونة **</>** (Web) → سمّ التطبيق `salaf-web` → Register
-4. **انسخ كائن `firebaseConfig`** - راح تحتاجه في الخطوة 1.4
+---
 
-### 1.2 تفعيل تسجيل الدخول
+## 🔥 الخطوة 1: حدّث قواعد أمان Firestore
 
-1. من القائمة اليسرى: **Build → Authentication** → Get started
-2. اختر **Email/Password** → فعّل أول خيار → Save
-
-### 1.3 تفعيل قاعدة البيانات Firestore
-
-1. من القائمة اليسرى: **Build → Firestore Database** → Create database
-2. اختر **Start in production mode** → التالي
-3. اختر أقرب منطقة لك (مثلاً: `eur3` أو `me-central1`) → Enable
-
-### 1.4 ضبط قواعد الأمان (مهم جداً!)
-
-1. في Firestore، اذهب لـ تبويب **Rules**
-2. الصق هذي القواعد بدل اللي موجودة:
+افتح [Firebase Console](https://console.firebase.google.com) → اختر مشروع `salaf-89294` → **Firestore Database** → **Rules** → الصق هذا بالضبط:
 
 ```javascript
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /users/{userId}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+    // userOrgMap - ربط المستخدم بالمنشأة وصلاحياته
+    match /userOrgMap/{uid} {
+      // كل مستخدم يقرأ ملفه. الأدمن يقرأ ملفات أعضاء منشأته.
+      allow read: if request.auth != null;
+      // الإنشاء فقط لنفسك (وقت التسجيل)
+      allow create: if request.auth != null && request.auth.uid == uid;
+      // التعديل والحذف: نفسك أو الأدمن للأعضاء
+      allow update, delete: if request.auth != null;
+    }
+
+    // الدعوات - أي مستخدم مسجّل يقدر يقرأ (يبحث عن دعوته)
+    match /invitations/{invId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if request.auth != null;
+    }
+
+    // بيانات المنشأة - كل من يربط orgId له، يقرأ ويعدّل
+    match /orgs/{orgId}/{document=**} {
+      allow read, write: if request.auth != null &&
+        exists(/databases/$(database)/documents/userOrgMap/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/userOrgMap/$(request.auth.uid)).data.orgId == orgId;
     }
   }
 }
 ```
 
-3. اضغط **Publish**
+ثم اضغط **Publish**.
 
-> هذي القواعد تضمن إن كل مستخدم يشوف بياناته فقط، ولا أحد ثاني يقدر يفتحها.
+> ⚠️ **هذه القواعد مختلفة عن القديمة!** القديمة كانت لـ `users/{userId}` والجديدة لـ `orgs/{orgId}`.
 
-### 1.5 نسخ إعدادات Firebase للمشروع
+---
 
-افتح ملف `src/firebase.js` واستبدل القيم بقيمك من الخطوة 1.1:
+## 📥 الخطوة 2: ارفع الملفات الجديدة
 
-```javascript
-const firebaseConfig = {
-  apiKey: "AIzaSy...",
-  authDomain: "salaf-app.firebaseapp.com",
-  projectId: "salaf-app",
-  storageBucket: "salaf-app.appspot.com",
-  messagingSenderId: "123456789",
-  appId: "1:123:web:abc..."
-};
+### الطريقة الأبسط (في GitHub Desktop):
+
+1. افتح GitHub Desktop واختر repository **salaf-app**
+2. اضغط **Repository → Show in Explorer**
+3. **احذف كل الملفات والمجلدات** عدا:
+   - `.git` (مجلد مخفي - لا تحذفه!)
+4. انسخ كل الملفات الجديدة من ملف الـ zip الذي رح أعطيك
+5. ارجع لـ GitHub Desktop، راح يطلع لك كل الملفات في يسار الشاشة
+6. اكتب رسالة commit: `Upgrade to Pro v2.0`
+7. اضغط **Commit to main**
+8. اضغط **Push origin**
+
+GitHub Actions راح يبني وينشر تلقائياً خلال 1-2 دقيقة. تابع التقدم في:
+```
+https://github.com/mousa2225/salaf-app/actions
 ```
 
 ---
 
-## 💻 الخطوة 2: تشغيل المشروع محلياً
+## ✅ الخطوة 3: افتح الموقع وسجّل أول مرة
 
-افتح Terminal (أو CMD على ويندوز) داخل مجلد المشروع:
-
-```bash
-npm install
-npm run dev
+افتح:
+```
+https://mousa2225.github.io/salaf-app/
 ```
 
-افتح الرابط اللي يطلع لك (عادة `http://localhost:5173`)، أنشئ حساب، وجرّب التطبيق.
+> ⚠️ ملاحظة مهمة: لما تفتح حساب **لأول مرة** بعد الترقية، النظام راح يعتبرك **أدمن** لمنشأة جديدة. إذا فتحت بنفس البريد القديم، لن تشوف البيانات القديمة (لأن البنية تغيرت).
+
+### إذا كان عندك بيانات قديمة تريد ترحيلها:
+- بدّل إيميل التسجيل أو احذف البيانات القديمة من Firestore يدوياً
+- البيانات القديمة موجودة في `users/{uid}/employees/...` (البنية القديمة)
+- الجديدة في `orgs/{uid}/employees/...`
+
+(بما إنك قلت "لم أسجل بيانات بعد" فالموضوع بسيط، فقط ابدأ من جديد)
 
 ---
 
-## 🐙 الخطوة 3: رفع المشروع على GitHub
+## 👥 الخطوة 4: كيف تدعو مستخدمين آخرين
 
-### 3.1 إنشاء Repository
-
-1. روح [github.com/new](https://github.com/new)
-2. **اسم الـ Repository:** `salaf-app` (نفس الاسم اللي في `vite.config.js`)
-3. اختر **Public** (لازم Public للنشر المجاني على GitHub Pages)
-4. **لا تختار** أي خيارات إضافية (ولا README ولا .gitignore)
-5. اضغط **Create repository**
-
-### 3.2 ربط المشروع بـ GitHub
-
-في Terminal داخل مجلد المشروع، شغّل (استبدل `YOUR_USERNAME` باسم حسابك):
-
-```bash
-git init
-git add .
-git commit -m "Initial commit"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/salaf-app.git
-git push -u origin main
-```
+1. من القائمة الجانبية، اضغط **المستخدمون**
+2. اضغط **دعوة مستخدم**
+3. أدخل البريد الإلكتروني للشخص
+4. اختر دور (مشاهد فقط / محاسب / مدير / أدمن) أو خصّص الصلاحيات يدوياً
+5. اضغط **إنشاء الدعوة**
+6. أعطِ الشخص رابط الموقع: `https://mousa2225.github.io/salaf-app/`
+7. اطلب منه يفتح حساب جديد **بنفس البريد** الذي أرسلت إليه الدعوة
+8. تلقائياً راح يحصل على الصلاحيات اللي حددتها
 
 ---
 
-## 🚀 الخطوة 4: النشر على GitHub Pages
+## 🎯 الميزات الجديدة في Pro
 
-### 4.1 النشر بضغطة زر
+### 🔐 نظام صلاحيات كامل (20 صلاحية)
+- 4 قوالب جاهزة: مشاهد / محاسب / مدير / أدمن
+- أو خصّص يدوياً لكل مستخدم
+- الأدمن يقدر يعطي غيره صلاحية أدمن
 
-```bash
-npm run deploy
-```
+### 👥 إدارة موظفين متقدمة
+- راتب شهري + قسم + تاريخ توظيف + حالة (نشط/موقوف/منتهي خدمة)
+- حد أقصى للسلفة (نسبة من الراتب)
+- تنبيه تلقائي عند تجاوز الحد
 
-هذا الأمر يبني المشروع ويرفعه على branch اسمه `gh-pages` تلقائياً.
+### 💰 سلف ذكية بأقساط
+- سلفة دفعة واحدة أو بأقساط تلقائية (2-12 شهر)
+- جدول أقساط يبني لحاله مع تواريخ الاستحقاق
+- زر "تسجيل التسديد" يحوّل القسط لخصم تلقائياً
+- أرقام سندات تلقائية (A-00001, D-00001)
 
-### 4.2 تفعيل GitHub Pages
+### 📊 تقارير وتحليلات شاملة
+- تحليل شهري بـ 12 شهر بالرسوم البيانية
+- مقارنة بين السنوات
+- أعلى 10 موظفين سلفاً
+- توزيع حسب الأقسام (Pie chart)
+- **تقرير الأعمار** (الأقساط المتأخرة 0-30 / 31-60 / 61-90 / +90 يوم)
+- تصدير شامل لإكسل (5 شيتات)
 
-1. روح صفحة الـ repository على GitHub
-2. **Settings** (إعدادات) → من القائمة اليسرى **Pages**
-3. تحت **Source**: اختر **Deploy from a branch**
-4. تحت **Branch**: اختر `gh-pages` → `/(root)` → **Save**
-5. انتظر دقيقتين، راح يطلع رابط أخضر:
-   ```
-   https://YOUR_USERNAME.github.io/salaf-app/
-   ```
+### 📈 لوحة مؤشرات احترافية
+- 4 KPI أساسية + 4 إحصائيات سريعة
+- رسم بياني لـ 6 أشهر ماضية
+- أعلى المدينين
+- تنبيهات الأقساط المستحقة والمتأخرة
 
-### 4.3 إضافة الـ Domain للـ Authorized Domains في Firebase
-
-عشان تسجيل الدخول يشتغل من الرابط المنشور:
-
-1. Firebase Console → **Authentication** → **Settings** → **Authorized domains**
-2. اضغط **Add domain**
-3. أضف: `YOUR_USERNAME.github.io` (بدون https وبدون مسار)
-
----
-
-## 🔄 التحديثات المستقبلية
-
-أي تعديل تسويه على الكود، شغّل:
-
-```bash
-git add .
-git commit -m "وصف التعديل"
-git push
-npm run deploy
-```
+### 📑 كشف حساب احترافي
+- بيانات الموظف الكاملة
+- دفتر حركات (مدين/دائن/رصيد)
+- جدول الأقساط
+- تصدير لإكسل بثلاث شيتات
 
 ---
 
-## ⚠️ تنبيهات مهمة
+## 🐛 حل المشاكل الشائعة
 
-### إذا غيرت اسم الـ repository
-لازم تحدّث ملف `vite.config.js`:
-```javascript
-base: '/الاسم-الجديد/',
-```
+### الموقع يطلع صفحة بيضاء
+→ افتح Developer Tools (F12) وشوف الأخطاء. الأرجح ما تم تحديث قواعد Firestore.
 
-### الخطة المجانية لـ Firebase تكفي لـ:
-- ٥٠٬٠٠٠ قراءة يومياً
-- ٢٠٬٠٠٠ كتابة يومياً
-- ١ جيجا تخزين
+### "Permission denied"
+→ راجع الخطوة 1، تأكد من قواعد Firestore الجديدة.
 
-أكثر من كافية لأي مشروع صغير-متوسط.
+### "Setup Pages failed"
+→ في GitHub repo: Settings → Pages → Source = **GitHub Actions** (ليس "Deploy from a branch").
 
-### النسخ الاحتياطي
-بياناتك محفوظة عند Google، لكن يفضل من فترة لأخرى:
-- صدّر "أرصدة الموظفين" كملف إكسل واحتفظ به
+### الرسوم البيانية ما تظهر
+→ تأكد ان `npm install` نجح. recharts لازم تكون موجودة في package.json (موجودة).
 
 ---
 
-## 🆘 حل المشاكل الشائعة
-
-**المشكلة:** الصفحة بيضاء بعد النشر
-**الحل:** تأكد إن `base` في `vite.config.js` يطابق اسم الـ repository
-
-**المشكلة:** تسجيل الدخول ما يشتغل بعد النشر
-**الحل:** أضف الـ domain في Authorized domains (الخطوة 4.3)
-
-**المشكلة:** `Permission denied` في Firestore
-**الحل:** راجع قواعد الأمان (الخطوة 1.4)
-
-**المشكلة:** `npm install` فشل
-**الحل:** تأكد إن Node.js مثبت (`node -v` يطلع نسخة)
+🎉 **بالتوفيق! تواصل معي لو احتجت أي شي**

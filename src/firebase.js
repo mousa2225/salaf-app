@@ -1,10 +1,3 @@
-// ============================================
-// 🔥 إعدادات Firebase
-// ============================================
-// استبدل القيم أدناه بإعدادات مشروعك من Firebase Console
-// راجع ملف SETUP.md للتعليمات التفصيلية
-// ============================================
-
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
