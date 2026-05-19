@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import {
   collection, doc, deleteDoc, onSnapshot, writeBatch,
-  getDoc, updateDoc, setDoc, query, where,
+  getDoc, updateDoc, setDoc, query, where, getDocs,
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { Loader2 } from 'lucide-react';
@@ -66,6 +66,65 @@ export default function App() {
 }
 
 function ProfileMissing({ user }) {
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
+
+  const checkForInvitation = async () => {
+    setError('');
+    setInfo('');
+    setChecking(true);
+    try {
+      const emailLower = user.email.trim().toLowerCase();
+      const invSnap = await getDocs(query(
+        collection(db, 'invitations'),
+        where('email', '==', emailLower),
+        limit(1),
+      ));
+
+      if (invSnap.empty) {
+        setError('🚫 لم نجد لك دعوة. اطلب من الأدمن إنشاء دعوة بالبريد ' + emailLower);
+        setChecking(false);
+        return;
+      }
+
+      const invDoc = invSnap.docs[0];
+      const invitationData = invDoc.data();
+      const invitationOrgId = invitationData.orgId;
+      const uid = user.uid;
+      const name = user.displayName || emailLower.split('@')[0];
+
+      // Link to org
+      await setDoc(doc(db, 'userOrgMap', uid), {
+        orgId: invitationOrgId,
+        role: invitationData.role || 'member',
+        permissions: invitationData.permissions || [],
+        displayName: name,
+        email: emailLower,
+        isAdmin: invitationData.isAdmin || false,
+        createdAt: new Date().toISOString(),
+      });
+      await setDoc(doc(db, 'orgs', invitationOrgId, 'members', uid), {
+        uid,
+        email: emailLower,
+        displayName: name,
+        role: invitationData.role || 'member',
+        permissions: invitationData.permissions || [],
+        isAdmin: invitationData.isAdmin || false,
+        createdAt: new Date().toISOString(),
+      });
+      // delete invitation
+      try { await deleteDoc(doc(db, 'invitations', invDoc.id)); } catch { /* ignore */ }
+
+      setInfo('✅ تم تفعيل حسابك! جاري إعادة التحميل...');
+      setTimeout(() => window.location.reload(), 1200);
+    } catch (e) {
+      console.error('Activation failed:', e);
+      setError('فشل التفعيل: ' + (e.message || 'خطأ غير معروف'));
+      setChecking(false);
+    }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
       <div className="card rounded-lg p-7 max-w-md w-full text-center">
@@ -75,13 +134,33 @@ function ProfileMissing({ user }) {
           البريد <span className="font-semibold ink num">{user.email}</span> غير مرتبط بأي منشأة.
         </p>
 
-        <div className="p-3 rounded-md text-sm mb-5 text-right" style={{ background: '#FBF4F1', color: '#8B2635' }}>
-          ⚠️ يجب أن يدعوك الأدمن أولاً قبل تفعيل حسابك. تواصل مع مدير النظام.
+        <div className="p-3 rounded-md text-sm mb-4 text-right" style={{ background: '#FBF4F1', color: '#8B2635' }}>
+          ⚠️ إذا كان الأدمن دعاك للنظام، اضغط الزر بالأسفل للبحث عن الدعوة وتفعيل حسابك تلقائياً.
         </div>
+
+        {error && (
+          <div className="p-3 rounded-md text-sm mb-3 text-right" style={{ background: '#FBF4F1', color: '#8B2635' }}>
+            {error}
+          </div>
+        )}
+
+        {info && (
+          <div className="p-3 rounded-md text-sm mb-3 text-right" style={{ background: '#F4F8F5', color: '#1F4D3F' }}>
+            {info}
+          </div>
+        )}
+
+        <button
+          onClick={checkForInvitation}
+          disabled={checking}
+          className="btn-primary w-full py-2.5 rounded-md text-sm font-medium mb-2"
+        >
+          {checking ? '⏳ جاري البحث عن دعوتك...' : '🔍 ابحث عن دعوتي وفعّل حسابي'}
+        </button>
 
         <button
           onClick={() => signOut(auth)}
-          className="btn-primary w-full py-2.5 rounded-md text-sm font-medium"
+          className="btn-ghost w-full py-2 rounded-md text-sm"
         >
           تسجيل خروج
         </button>
