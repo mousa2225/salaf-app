@@ -15,6 +15,7 @@ import Deductions from './pages/Deductions';
 import Statement from './pages/Statement';
 import Reports from './pages/Reports';
 import UsersPage from './pages/Users';
+import MonthlyDeductions from './pages/MonthlyDeductions';
 import Layout, { PermissionDenied } from './components/Layout';
 import Toast from './components/Toast';
 
@@ -595,6 +596,8 @@ function MainApp({ user }) {
         return can(user, 'VIEW_ADVANCES') ? <Advances {...pageProps} /> : <PermissionDenied permName="عرض السلف" />;
       case 'deductions':
         return can(user, 'VIEW_DEDUCTIONS') ? <Deductions {...pageProps} /> : <PermissionDenied permName="عرض الخصومات" />;
+      case 'monthly':
+        return can(user, 'ADD_DEDUCTION') ? <MonthlyDeductions {...pageProps} /> : <PermissionDenied permName="تطبيق خصومات الشهر" />;
       case 'statement':
         return can(user, 'VIEW_STATEMENT') ? <Statement {...pageProps} /> : <PermissionDenied permName="عرض كشف الحساب" />;
       case 'reports':

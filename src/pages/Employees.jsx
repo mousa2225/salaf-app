@@ -1,15 +1,18 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import {
-  Plus, Upload, Search, Trash2, Edit, FileSpreadsheet,
+  Plus, Upload, Search, Trash2, Edit, FileSpreadsheet, Download,
 } from 'lucide-react';
 import Modal, { ConfirmModal } from '../components/Modal';
-import { fmt, todayISO, can, EMPLOYEE_STATUS, findCol, COLS, uid } from '../lib/utils';
+import { fmt, todayISO, fmtDate, can, EMPLOYEE_STATUS, findCol, COLS, uid } from '../lib/utils';
 import { collection, writeBatch, doc } from 'firebase/firestore';
 import { db } from '../firebase';
+import {
+  STYLES, cell, buildSheet, exportWorkbook, buildTitleBlock, titleBlockMerges,
+} from '../lib/excel';
 
 export default function Employees({
-  user, employees, balances, showToast,
+  user, employees, balances, showToast, transactions = [],
   addEmployee, updateEmployee, deleteEmployee, empByIqama,
 }) {
   const [showForm, setShowForm] = useState(false);
@@ -135,6 +138,134 @@ export default function Employees({
     XLSX.writeFile(wb, 'قالب_الموظفين.xlsx');
   };
 
+  // ========== Export styled XLSX ==========
+  const exportEmployeesXLSX = () => {
+    // Compute per-employee totals
+    const empSums = {};
+    employees.forEach((e) => {
+      empSums[e.id] = { adv: 0, ded: 0, advCount: 0, dedCount: 0, lastTx: null };
+    });
+    transactions.forEach((t) => {
+      const s = empSums[t.employeeId];
+      if (!s) return;
+      if (t.type === 'advance') { s.adv += Number(t.amount); s.advCount++; }
+      else { s.ded += Number(t.amount); s.dedCount++; }
+      if (!s.lastTx || t.date > s.lastTx) s.lastTx = t.date;
+    });
+
+    const totals = {
+      employees: filtered.length,
+      adv: 0, ded: 0, balance: 0,
+    };
+
+    const colsCount = 11;
+    const rows = [];
+
+    // Title block
+    const headerInfo = [
+      ['تاريخ التقرير', fmtDate(todayISO())],
+      ['عدد الموظفين', `${filtered.length} موظف`],
+      ['أعدّه', user.displayName || user.email],
+    ];
+    rows.push(...buildTitleBlock({
+      title: '📋 قائمة الموظفين الشاملة',
+      subtitle: 'تقرير شامل بالأرصدة والسلف والخصومات',
+      info: headerInfo,
+      colsCount,
+    }));
+    const merges = titleBlockMerges({ colsCount, hasSubtitle: true, numInfoRows: headerInfo.length });
+
+    // Section header
+    const sectionRowIdx = rows.length;
+    const sectionRow = Array.from({ length: colsCount }, () => cell('', STYLES.sectionHeader));
+    sectionRow[0] = cell('  📊 تفاصيل الموظفين', STYLES.sectionHeader);
+    rows.push(sectionRow);
+    merges.push({ s: { r: sectionRowIdx, c: 0 }, e: { r: sectionRowIdx, c: colsCount - 1 } });
+
+    // Table header
+    const headers = [
+      '#', 'الاسم', 'رقم الإقامة', 'الجوال', 'الوظيفة',
+      'القسم', 'الراتب', 'إجمالي السلف', 'إجمالي المسدد',
+      'الرصيد المستحق', 'الحالة'
+    ];
+    rows.push(headers.map((h) => cell(h, STYLES.th)));
+
+    // Body
+    filtered.forEach((e, idx) => {
+      const alt = idx % 2 === 1;
+      const s = empSums[e.id] || { adv: 0, ded: 0 };
+      const bal = (balances[e.id] || 0);
+      totals.adv += s.adv; totals.ded += s.ded; totals.balance += bal;
+      const status = EMPLOYEE_STATUS[e.status || 'active'];
+      const statusStyle = e.status === 'terminated' ? STYLES.badgeRed
+        : e.status === 'suspended' ? STYLES.badgeAmber
+        : STYLES.badgeGreen;
+
+      rows.push([
+        cell(idx + 1, STYLES.tdCenter(alt), true),
+        cell(e.name, STYLES.tdBold(alt)),
+        cell(e.iqama, STYLES.tdCenter(alt)),
+        cell(e.phone || '-', STYLES.tdMuted(alt)),
+        cell(e.position || '-', STYLES.tdMuted(alt)),
+        cell(e.department || '-', STYLES.tdMuted(alt)),
+        cell(Number(e.salary) || 0, STYLES.num(alt), true),
+        cell(s.adv, STYLES.numGreen(alt), true),
+        cell(s.ded, STYLES.numRed(alt), true),
+        cell(bal, bal > 0 ? STYLES.numAmber(alt) : STYLES.num(alt), true),
+        cell(status.label, statusStyle),
+      ]);
+    });
+
+    // Totals row
+    rows.push([
+      cell('', STYLES.totalLabel),
+      cell('الإجماليات', STYLES.totalLabel),
+      cell('', STYLES.totalLabel),
+      cell('', STYLES.totalLabel),
+      cell('', STYLES.totalLabel),
+      cell('', STYLES.totalLabel),
+      cell('', STYLES.totalLabel),
+      cell(totals.adv, STYLES.totalNum, true),
+      cell(totals.ded, STYLES.totalNum, true),
+      cell(totals.balance, STYLES.totalNum, true),
+      cell('', STYLES.totalLabel),
+    ]);
+
+    // Column widths
+    const cols = [
+      { wch: 5 },    // #
+      { wch: 25 },   // name
+      { wch: 14 },   // iqama
+      { wch: 13 },   // phone
+      { wch: 15 },   // position
+      { wch: 15 },   // dept
+      { wch: 12 },   // salary
+      { wch: 14 },   // adv
+      { wch: 14 },   // ded
+      { wch: 14 },   // balance
+      { wch: 12 },   // status
+    ];
+
+    // Row heights (taller header, normal body)
+    const rowHeights = [];
+    rowHeights[0] = { hpt: 30 }; // title
+    rowHeights[1] = { hpt: 20 }; // subtitle
+    // info rows ~18
+    for (let i = 2; i < 2 + headerInfo.length; i++) rowHeights[i] = { hpt: 20 };
+    // section header
+    rowHeights[sectionRowIdx] = { hpt: 24 };
+    // table header
+    rowHeights[sectionRowIdx + 1] = { hpt: 28 };
+
+    const ws = buildSheet(rows, { cols, rows: rowHeights, merges });
+
+    exportWorkbook(
+      [{ name: 'الموظفون', ws }],
+      `قائمة_الموظفين_${todayISO()}.xlsx`
+    );
+    showToast('تم تنزيل القائمة بتنسيق احترافي');
+  };
+
   return (
     <div className="space-y-6">
       <div className="card rounded-lg p-6">
@@ -144,6 +275,11 @@ export default function Employees({
             <p className="text-sm ink-muted">{employees.length} موظف • {filtered.length} ظاهر</p>
           </div>
           <div className="flex flex-wrap gap-2">
+            {can(user, 'EXPORT_DATA') && employees.length > 0 && (
+              <button onClick={exportEmployeesXLSX} className="btn-secondary px-3 py-2 rounded-md text-sm font-medium inline-flex items-center gap-2" style={{ background: '#F4F8F5', color: '#1F4D3F', borderColor: '#1F4D3F' }}>
+                <Download size={16} /> تنزيل Excel
+              </button>
+            )}
             {canImport && (
               <>
                 <button onClick={downloadTemplate} className="btn-ghost px-3 py-2 rounded-md text-sm inline-flex items-center gap-2">

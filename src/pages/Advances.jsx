@@ -1,11 +1,14 @@
 import { useState, useMemo, useEffect } from 'react';
 import {
-  Plus, Trash2, Edit, X, AlertTriangle, Info, Calendar,
+  Plus, Trash2, Edit, X, AlertTriangle, Info, Calendar, Download,
 } from 'lucide-react';
 import Modal, { ConfirmModal } from '../components/Modal';
 import {
   fmt, fmtDate, todayISO, monthKeyOf, currentMonth, monthLabel, can, DEDUCTION_TYPES, addMonths,
 } from '../lib/utils';
+import {
+  STYLES, cell, buildSheet, exportWorkbook, buildTitleBlock, titleBlockMerges,
+} from '../lib/excel';
 
 export default function Advances({
   user, employees, transactions, installments, empById, balances, showToast,
@@ -14,18 +17,25 @@ export default function Advances({
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
+  const [filterMode, setFilterMode] = useState('month'); // 'month' | 'range' | 'all'
   const [filterMonth, setFilterMonth] = useState(currentMonth());
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
 
   const canAdd = can(user, 'ADD_ADVANCE');
   const canEdit = can(user, 'EDIT_ADVANCE');
   const canDelete = can(user, 'DELETE_ADVANCE');
 
-  const advances = useMemo(() =>
-    transactions
-      .filter((t) => t.type === 'advance' && monthKeyOf(t.date) === filterMonth)
-      .sort((a, b) => b.date.localeCompare(a.date)),
-    [transactions, filterMonth]
-  );
+  const advances = useMemo(() => {
+    let list = transactions.filter((t) => t.type === 'advance');
+    if (filterMode === 'month') {
+      list = list.filter((t) => monthKeyOf(t.date) === filterMonth);
+    } else if (filterMode === 'range' && (fromDate || toDate)) {
+      if (fromDate) list = list.filter((t) => t.date >= fromDate);
+      if (toDate) list = list.filter((t) => t.date <= toDate);
+    }
+    return list.sort((a, b) => b.date.localeCompare(a.date));
+  }, [transactions, filterMode, filterMonth, fromDate, toDate]);
 
   const allMonths = useMemo(() => {
     const set = new Set([currentMonth()]);
@@ -40,6 +50,109 @@ export default function Advances({
     return { total, count: advances.length, uniqueEmps, withInstallment };
   }, [advances]);
 
+  // ========== Styled Excel Export ==========
+  const exportAdvancesXLSX = () => {
+    const colsCount = 8;
+    const rows = [];
+
+    // Build period description based on filter
+    let periodText = '';
+    let fileSuffix = '';
+    if (filterMode === 'month') {
+      periodText = monthLabel(filterMonth);
+      fileSuffix = filterMonth;
+    } else if (filterMode === 'range') {
+      if (fromDate && toDate) {
+        periodText = `من ${fmtDate(fromDate)} إلى ${fmtDate(toDate)}`;
+        fileSuffix = `${fromDate}_إلى_${toDate}`;
+      } else if (fromDate) {
+        periodText = `من ${fmtDate(fromDate)}`;
+        fileSuffix = `من_${fromDate}`;
+      } else if (toDate) {
+        periodText = `حتى ${fmtDate(toDate)}`;
+        fileSuffix = `حتى_${toDate}`;
+      } else {
+        periodText = 'كل الفترات';
+        fileSuffix = 'الكل';
+      }
+    } else {
+      periodText = 'جميع السلف';
+      fileSuffix = 'كامل';
+    }
+
+    const headerInfo = [
+      ['تاريخ التقرير', fmtDate(todayISO())],
+      ['الفترة', periodText],
+      ['عدد السلف', `${stats.count} سلفة`],
+      ['عدد الموظفين', `${stats.uniqueEmps} موظف`],
+      ['أعدّه', user.displayName || user.email],
+    ];
+    rows.push(...buildTitleBlock({
+      title: '💰 تقرير السلف',
+      subtitle: periodText,
+      info: headerInfo,
+      colsCount,
+    }));
+    const merges = titleBlockMerges({ colsCount, hasSubtitle: true, numInfoRows: headerInfo.length });
+
+    // Section
+    const sectionIdx = rows.length;
+    const sectionRow = Array.from({ length: colsCount }, () => cell('', STYLES.sectionHeader));
+    sectionRow[0] = cell('  📋 تفاصيل السلف', STYLES.sectionHeader);
+    rows.push(sectionRow);
+    merges.push({ s: { r: sectionIdx, c: 0 }, e: { r: sectionIdx, c: colsCount - 1 } });
+
+    // Headers
+    const headers = ['رقم السند', 'التاريخ', 'اسم الموظف', 'رقم الإقامة', 'القسم', 'النوع', 'ملاحظات', 'المبلغ'];
+    rows.push(headers.map((h) => cell(h, STYLES.th)));
+
+    advances.forEach((t, idx) => {
+      const alt = idx % 2 === 1;
+      const emp = empById[t.employeeId];
+      rows.push([
+        cell(t.voucherNo || '-', STYLES.tdCenter(alt)),
+        cell(fmtDate(t.date), STYLES.date(alt)),
+        cell(emp?.name || '—', STYLES.tdBold(alt)),
+        cell(emp?.iqama || '-', STYLES.tdCenter(alt)),
+        cell(emp?.department || '-', STYLES.tdMuted(alt)),
+        cell(t.installmentPlanId ? 'بالتقسيط' : 'دفعة واحدة',
+             t.installmentPlanId ? STYLES.badgeBlue : STYLES.badgeGreen),
+        cell(t.notes || '-', STYLES.tdMuted(alt)),
+        cell(Number(t.amount), STYLES.numGreen(alt), true),
+      ]);
+    });
+
+    // Total
+    rows.push([
+      cell('', STYLES.totalLabel),
+      cell('', STYLES.totalLabel),
+      cell('', STYLES.totalLabel),
+      cell('', STYLES.totalLabel),
+      cell('', STYLES.totalLabel),
+      cell('', STYLES.totalLabel),
+      cell('الإجمالي', STYLES.totalLabel),
+      cell(stats.total, STYLES.totalNum, true),
+    ]);
+
+    const cols = [
+      { wch: 12 }, { wch: 13 }, { wch: 25 }, { wch: 14 },
+      { wch: 15 }, { wch: 13 }, { wch: 25 }, { wch: 14 },
+    ];
+    const rowHeights = [];
+    rowHeights[0] = { hpt: 30 };
+    rowHeights[1] = { hpt: 20 };
+    for (let i = 2; i < 2 + headerInfo.length; i++) rowHeights[i] = { hpt: 20 };
+    rowHeights[sectionIdx] = { hpt: 24 };
+    rowHeights[sectionIdx + 1] = { hpt: 28 };
+
+    const ws = buildSheet(rows, { cols, rows: rowHeights, merges });
+    exportWorkbook(
+      [{ name: 'السلف', ws }],
+      `سلف_${fileSuffix}_${todayISO()}.xlsx`
+    );
+    showToast('تم تنزيل تقرير السلف');
+  };
+
   return (
     <div className="space-y-6">
       <div className="card rounded-lg p-6">
@@ -48,11 +161,18 @@ export default function Advances({
             <h2 className="display text-2xl font-bold ink">السلف</h2>
             <p className="text-sm ink-muted">تسجيل ومتابعة السلف الممنوحة للموظفين</p>
           </div>
-          {canAdd && (
-            <button onClick={() => { setEditing(null); setShowForm(true); }} className="btn-primary px-4 py-2 rounded-md text-sm font-medium inline-flex items-center gap-2">
-              <Plus size={16} /> سلفة جديدة
-            </button>
-          )}
+          <div className="flex flex-wrap gap-2">
+            {can(user, 'EXPORT_DATA') && advances.length > 0 && (
+              <button onClick={exportAdvancesXLSX} className="btn-secondary px-3 py-2 rounded-md text-sm font-medium inline-flex items-center gap-2" style={{ background: '#F4F8F5', color: '#1F4D3F', borderColor: '#1F4D3F' }}>
+                <Download size={16} /> تنزيل Excel
+              </button>
+            )}
+            {canAdd && (
+              <button onClick={() => { setEditing(null); setShowForm(true); }} className="btn-primary px-4 py-2 rounded-md text-sm font-medium inline-flex items-center gap-2">
+                <Plus size={16} /> سلفة جديدة
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Stats */}
@@ -76,11 +196,37 @@ export default function Advances({
         </div>
 
         {/* Filter */}
-        <div className="flex items-center gap-2 mb-4">
+        <div className="flex flex-wrap items-center gap-2 mb-4 p-3 rounded-md border divider" style={{ background: '#FCF8EC' }}>
           <Calendar size={14} className="ink-muted" />
-          <select value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} className="input-base !py-1.5 !w-auto text-sm">
-            {allMonths.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+          <select value={filterMode} onChange={(e) => setFilterMode(e.target.value)} className="input-base !py-1.5 !w-auto text-sm">
+            <option value="month">حسب الشهر</option>
+            <option value="range">من تاريخ - إلى تاريخ</option>
+            <option value="all">جميع السلف</option>
           </select>
+
+          {filterMode === 'month' && (
+            <select value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} className="input-base !py-1.5 !w-auto text-sm">
+              {allMonths.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+            </select>
+          )}
+
+          {filterMode === 'range' && (
+            <>
+              <span className="text-xs ink-muted">من:</span>
+              <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)}
+                className="input-base !py-1.5 !w-auto text-sm" />
+              <span className="text-xs ink-muted">إلى:</span>
+              <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)}
+                className="input-base !py-1.5 !w-auto text-sm" />
+              {(fromDate || toDate) && (
+                <button onClick={() => { setFromDate(''); setToDate(''); }} className="btn-ghost text-xs px-2 py-1 rounded">
+                  مسح
+                </button>
+              )}
+            </>
+          )}
+
+          <span className="text-xs ink-muted mr-auto num">{advances.length} نتيجة</span>
         </div>
 
         {/* Table */}

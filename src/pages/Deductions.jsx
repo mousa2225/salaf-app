@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import {
   Plus, Trash2, Edit, X, Upload, FileSpreadsheet,
-  Calendar, Check, CheckCircle,
+  Calendar, Check, CheckCircle, Download,
 } from 'lucide-react';
 import Modal, { ConfirmModal } from '../components/Modal';
 import {
@@ -11,6 +11,9 @@ import {
 } from '../lib/utils';
 import { collection, writeBatch, doc } from 'firebase/firestore';
 import { db } from '../firebase';
+import {
+  STYLES, cell, buildSheet, exportWorkbook, buildTitleBlock, titleBlockMerges,
+} from '../lib/excel';
 
 export default function Deductions({
   user, employees, transactions, installments, empById, empByIqama, showToast,
@@ -20,7 +23,10 @@ export default function Deductions({
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
+  const [filterMode, setFilterMode] = useState('month');
   const [filterMonth, setFilterMonth] = useState(currentMonth());
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const fileRef = useRef();
 
   const canAdd = can(user, 'ADD_DEDUCTION');
@@ -28,12 +34,16 @@ export default function Deductions({
   const canDelete = can(user, 'DELETE_DEDUCTION');
   const canImport = can(user, 'IMPORT_DEDUCTIONS');
 
-  const deductions = useMemo(() =>
-    transactions
-      .filter((t) => t.type === 'deduction' && monthKeyOf(t.date) === filterMonth)
-      .sort((a, b) => b.date.localeCompare(a.date)),
-    [transactions, filterMonth]
-  );
+  const deductions = useMemo(() => {
+    let list = transactions.filter((t) => t.type === 'deduction');
+    if (filterMode === 'month') {
+      list = list.filter((t) => monthKeyOf(t.date) === filterMonth);
+    } else if (filterMode === 'range' && (fromDate || toDate)) {
+      if (fromDate) list = list.filter((t) => t.date >= fromDate);
+      if (toDate) list = list.filter((t) => t.date <= toDate);
+    }
+    return list.sort((a, b) => b.date.localeCompare(a.date));
+  }, [transactions, filterMode, filterMonth, fromDate, toDate]);
 
   const allMonths = useMemo(() => {
     const set = new Set([currentMonth()]);
@@ -136,6 +146,108 @@ export default function Deductions({
     XLSX.writeFile(wb, 'قالب_الخصومات.xlsx');
   };
 
+  // ========== Styled Excel Export ==========
+  const exportDeductionsXLSX = () => {
+    const totalAmount = deductions.reduce((s, t) => s + Number(t.amount), 0);
+    const uniqueEmps = new Set(deductions.map((d) => d.employeeId)).size;
+
+    let periodText = '';
+    let fileSuffix = '';
+    if (filterMode === 'month') {
+      periodText = monthLabel(filterMonth);
+      fileSuffix = filterMonth;
+    } else if (filterMode === 'range') {
+      if (fromDate && toDate) {
+        periodText = `من ${fmtDate(fromDate)} إلى ${fmtDate(toDate)}`;
+        fileSuffix = `${fromDate}_إلى_${toDate}`;
+      } else if (fromDate) {
+        periodText = `من ${fmtDate(fromDate)}`;
+        fileSuffix = `من_${fromDate}`;
+      } else if (toDate) {
+        periodText = `حتى ${fmtDate(toDate)}`;
+        fileSuffix = `حتى_${toDate}`;
+      } else {
+        periodText = 'كل الفترات';
+        fileSuffix = 'الكل';
+      }
+    } else {
+      periodText = 'جميع الخصومات';
+      fileSuffix = 'كامل';
+    }
+
+    const colsCount = 7;
+    const rows = [];
+
+    const headerInfo = [
+      ['تاريخ التقرير', fmtDate(todayISO())],
+      ['الفترة', periodText],
+      ['عدد الخصومات', `${deductions.length} خصم`],
+      ['عدد الموظفين', `${uniqueEmps} موظف`],
+      ['أعدّه', user.displayName || user.email],
+    ];
+    rows.push(...buildTitleBlock({
+      title: '➖ تقرير الخصومات',
+      subtitle: periodText,
+      info: headerInfo,
+      colsCount,
+    }));
+    const merges = titleBlockMerges({ colsCount, hasSubtitle: true, numInfoRows: headerInfo.length });
+
+    // Section
+    const sectionIdx = rows.length;
+    const sectionRow = Array.from({ length: colsCount }, () => cell('', STYLES.sectionHeader));
+    sectionRow[0] = cell('  📋 تفاصيل الخصومات', STYLES.sectionHeader);
+    rows.push(sectionRow);
+    merges.push({ s: { r: sectionIdx, c: 0 }, e: { r: sectionIdx, c: colsCount - 1 } });
+
+    // Headers
+    const headers = ['رقم السند', 'التاريخ', 'اسم الموظف', 'رقم الإقامة', 'نوع الخصم', 'ملاحظات', 'المبلغ'];
+    rows.push(headers.map((h) => cell(h, STYLES.th)));
+
+    deductions.forEach((t, idx) => {
+      const alt = idx % 2 === 1;
+      const emp = empById[t.employeeId];
+      rows.push([
+        cell(t.voucherNo || '-', STYLES.tdCenter(alt)),
+        cell(fmtDate(t.date), STYLES.date(alt)),
+        cell(emp?.name || '—', STYLES.tdBold(alt)),
+        cell(emp?.iqama || '-', STYLES.tdCenter(alt)),
+        cell(t.deductionType || '-', STYLES.tdMuted(alt)),
+        cell(t.notes || '-', STYLES.tdMuted(alt)),
+        cell(Number(t.amount), STYLES.numRed(alt), true),
+      ]);
+    });
+
+    // Total
+    rows.push([
+      cell('', STYLES.totalLabel),
+      cell('', STYLES.totalLabel),
+      cell('', STYLES.totalLabel),
+      cell('', STYLES.totalLabel),
+      cell('', STYLES.totalLabel),
+      cell('الإجمالي', STYLES.totalLabel),
+      cell(totalAmount, STYLES.totalNum, true),
+    ]);
+
+    const cols = [
+      { wch: 14 }, { wch: 13 }, { wch: 25 }, { wch: 14 },
+      { wch: 22 }, { wch: 25 }, { wch: 14 },
+    ];
+    const rowHeights = [];
+    rowHeights[0] = { hpt: 30 };
+    rowHeights[1] = { hpt: 20 };
+    for (let i = 2; i < 2 + headerInfo.length; i++) rowHeights[i] = { hpt: 20 };
+    rowHeights[sectionIdx] = { hpt: 24 };
+    rowHeights[sectionIdx + 1] = { hpt: 28 };
+
+    const ws = buildSheet(rows, { cols, rows: rowHeights, merges });
+    exportWorkbook(
+      [{ name: 'الخصومات', ws }],
+      `خصومات_${fileSuffix}_${todayISO()}.xlsx`
+    );
+    showToast('تم تنزيل تقرير الخصومات');
+  };
+
   return (
     <div className="space-y-6">
       <div className="card rounded-lg p-6">
@@ -145,6 +257,11 @@ export default function Deductions({
             <p className="text-sm ink-muted">تسجيل ومتابعة الخصومات والأقساط</p>
           </div>
           <div className="flex flex-wrap gap-2">
+            {can(user, 'EXPORT_DATA') && deductions.length > 0 && (
+              <button onClick={exportDeductionsXLSX} className="btn-secondary px-3 py-2 rounded-md text-sm font-medium inline-flex items-center gap-2" style={{ background: '#F4F8F5', color: '#1F4D3F', borderColor: '#1F4D3F' }}>
+                <Download size={16} /> تنزيل Excel
+              </button>
+            )}
             {canImport && (
               <>
                 <button onClick={downloadTemplate} className="btn-ghost px-3 py-2 rounded-md text-sm inline-flex items-center gap-2">
@@ -182,11 +299,37 @@ export default function Deductions({
 
         {tab === 'list' && (
           <>
-            <div className="flex items-center gap-2 mb-4">
+            <div className="flex flex-wrap items-center gap-2 mb-4 p-3 rounded-md border divider" style={{ background: '#FCF8EC' }}>
               <Calendar size={14} className="ink-muted" />
-              <select value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} className="input-base !py-1.5 !w-auto text-sm">
-                {allMonths.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+              <select value={filterMode} onChange={(e) => setFilterMode(e.target.value)} className="input-base !py-1.5 !w-auto text-sm">
+                <option value="month">حسب الشهر</option>
+                <option value="range">من تاريخ - إلى تاريخ</option>
+                <option value="all">جميع الخصومات</option>
               </select>
+
+              {filterMode === 'month' && (
+                <select value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} className="input-base !py-1.5 !w-auto text-sm">
+                  {allMonths.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+                </select>
+              )}
+
+              {filterMode === 'range' && (
+                <>
+                  <span className="text-xs ink-muted">من:</span>
+                  <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)}
+                    className="input-base !py-1.5 !w-auto text-sm" />
+                  <span className="text-xs ink-muted">إلى:</span>
+                  <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)}
+                    className="input-base !py-1.5 !w-auto text-sm" />
+                  {(fromDate || toDate) && (
+                    <button onClick={() => { setFromDate(''); setToDate(''); }} className="btn-ghost text-xs px-2 py-1 rounded">
+                      مسح
+                    </button>
+                  )}
+                </>
+              )}
+
+              <span className="text-xs ink-muted mr-auto num">{deductions.length} نتيجة</span>
             </div>
 
             <div className="overflow-x-auto">

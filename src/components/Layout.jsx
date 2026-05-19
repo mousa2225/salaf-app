@@ -3,7 +3,7 @@ import { signOut } from 'firebase/auth';
 import { auth } from '../firebase';
 import {
   Home, Users, FileText, BookOpen, LogOut, ArrowUpCircle,
-  ArrowDownCircle, BarChart3, Settings, Menu, X, UserCog
+  ArrowDownCircle, BarChart3, Settings, Menu, X, UserCog, Wallet,
 } from 'lucide-react';
 import { can } from '../lib/utils';
 
@@ -12,6 +12,7 @@ const NAV_ITEMS = [
   { id: 'employees', label: 'الموظفون', icon: Users, perm: 'VIEW_EMPLOYEES' },
   { id: 'advances', label: 'السلف', icon: ArrowUpCircle, perm: 'VIEW_ADVANCES' },
   { id: 'deductions', label: 'الخصومات', icon: ArrowDownCircle, perm: 'VIEW_DEDUCTIONS' },
+  { id: 'monthly', label: 'خصومات الشهر', icon: Wallet, perm: 'ADD_DEDUCTION' },
   { id: 'statement', label: 'كشف حساب', icon: FileText, perm: 'VIEW_STATEMENT' },
   { id: 'reports', label: 'التقارير والتحليل', icon: BarChart3, perm: 'VIEW_REPORTS' },
   { id: 'users', label: 'المستخدمون', icon: UserCog, perm: 'MANAGE_USERS' },

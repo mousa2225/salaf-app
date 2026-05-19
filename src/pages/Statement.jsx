@@ -1,7 +1,9 @@
 import { useState, useMemo } from 'react';
-import * as XLSX from 'xlsx';
 import { Users, Search, Download, Printer } from 'lucide-react';
 import { fmt, fmtDate, todayISO, can, EMPLOYEE_STATUS } from '../lib/utils';
+import {
+  STYLES, cell, buildSheet, exportWorkbook, buildTitleBlock, titleBlockMerges,
+} from '../lib/excel';
 
 export default function Statement({
   user, employees, transactions, installments, balances, showToast,
@@ -52,63 +54,184 @@ export default function Statement({
 
   const exportXLSX = () => {
     if (!emp) return;
-    const sortedLedger = [...ledger].reverse();
+    const sortedLedger = [...ledger].reverse(); // chronological
+    const balance = stats.adv - stats.ded;
+
+    // ===== Sheet 1: كشف الحساب الرئيسي =====
+    const colsCount = 7;
+    const mainRows = [];
+    const headerInfo = [
+      ['اسم الموظف', emp.name],
+      ['رقم الإقامة', emp.iqama],
+      ['الوظيفة', emp.position || '-'],
+      ['القسم', emp.department || '-'],
+      ['الراتب الشهري', emp.salary ? fmt(emp.salary) + ' ر.س' : '-'],
+      ['تاريخ التوظيف', emp.hireDate ? fmtDate(emp.hireDate) : '-'],
+      ['الحالة', EMPLOYEE_STATUS[emp.status || 'active'].label],
+      ['تاريخ الكشف', fmtDate(todayISO())],
+    ];
+    mainRows.push(...buildTitleBlock({
+      title: `📊 كشف حساب الموظف: ${emp.name}`,
+      subtitle: 'تقرير شامل بجميع الحركات والأرصدة',
+      info: headerInfo,
+      colsCount,
+    }));
+    const merges = titleBlockMerges({ colsCount, hasSubtitle: true, numInfoRows: headerInfo.length });
+
+    // Summary section
+    let r = mainRows.length;
+    const summaryRow = Array.from({ length: colsCount }, () => cell('', STYLES.sectionHeader));
+    summaryRow[0] = cell('  💼 الملخص المالي', STYLES.sectionHeader);
+    mainRows.push(summaryRow);
+    merges.push({ s: { r, c: 0 }, e: { r, c: colsCount - 1 } });
+    r++;
+
+    // Summary KPI row
+    const sumLabelStyle = STYLES.tdBold(false);
+    const sumValueStyleGreen = STYLES.numGreen(false);
+    const sumValueStyleRed = STYLES.numRed(false);
+    const sumValueStyleAmber = STYLES.numAmber(false);
+
+    mainRows.push([
+      cell('إجمالي السلف:', sumLabelStyle),
+      cell(stats.adv, sumValueStyleGreen, true),
+      cell('إجمالي المسدد:', sumLabelStyle),
+      cell(stats.ded, sumValueStyleRed, true),
+      cell('الرصيد المستحق:', sumLabelStyle),
+      cell(balance, balance > 0 ? sumValueStyleAmber : sumValueStyleGreen, true),
+      cell('', STYLES.td(false)),
+    ]);
+    r++;
+
+    // Spacer
+    mainRows.push(Array.from({ length: colsCount }, () => null));
+    r++;
+
+    // Ledger section header
+    const ledgerSecRow = Array.from({ length: colsCount }, () => cell('', STYLES.sectionHeader));
+    ledgerSecRow[0] = cell('  📋 دفتر الحركات', STYLES.sectionHeader);
+    mainRows.push(ledgerSecRow);
+    merges.push({ s: { r, c: 0 }, e: { r, c: colsCount - 1 } });
+    r++;
+
+    // Table headers
+    mainRows.push([
+      cell('رقم السند', STYLES.th),
+      cell('التاريخ', STYLES.th),
+      cell('البيان', STYLES.th),
+      cell('مدين (سلفة)', STYLES.th),
+      cell('دائن (خصم)', STYLES.th),
+      cell('الرصيد', STYLES.th),
+      cell('ملاحظات', STYLES.th),
+    ]);
+
+    // Body with running balance
     let running = 0;
-    const rows = sortedLedger.map((t) => {
+    sortedLedger.forEach((t, idx) => {
+      const alt = idx % 2 === 1;
       const isAdv = t.type === 'advance';
       running += isAdv ? Number(t.amount) : -Number(t.amount);
-      return {
-        '#': t.voucherNo || '',
-        'التاريخ': t.date,
-        'البيان': isAdv ? `سلفة${t.installmentPlanId ? ' (بأقساط)' : ''}` : `خصم - ${t.deductionType || ''}`,
-        'مدين (سلفة)': isAdv ? Number(t.amount) : '',
-        'دائن (خصم)': isAdv ? '' : Number(t.amount),
-        'الرصيد': running,
-        'ملاحظات': t.notes || '',
-      };
+      mainRows.push([
+        cell(t.voucherNo || '-', STYLES.tdCenter(alt)),
+        cell(fmtDate(t.date), STYLES.date(alt)),
+        cell(isAdv ? `سلفة${t.installmentPlanId ? ' (بأقساط)' : ''}`
+              : `خصم - ${t.deductionType || ''}`,
+             STYLES.td(alt)),
+        cell(isAdv ? Number(t.amount) : '', isAdv ? STYLES.numGreen(alt) : STYLES.td(alt), isAdv),
+        cell(isAdv ? '' : Number(t.amount), !isAdv ? STYLES.numRed(alt) : STYLES.td(alt), !isAdv),
+        cell(running, STYLES.num(alt), true),
+        cell(t.notes || '', STYLES.tdMuted(alt)),
+      ]);
     });
 
-    rows.push({});
-    rows.push({ '#': '', 'التاريخ': 'الرصيد المستحق', 'البيان': '', 'مدين (سلفة)': '', 'دائن (خصم)': '', 'الرصيد': running });
+    // Final balance row
+    mainRows.push([
+      cell('', STYLES.totalLabel),
+      cell('', STYLES.totalLabel),
+      cell('الرصيد النهائي المستحق', STYLES.totalLabel),
+      cell('', STYLES.totalLabel),
+      cell('', STYLES.totalLabel),
+      cell(running, STYLES.totalNum, true),
+      cell('', STYLES.totalLabel),
+    ]);
 
-    const ws = XLSX.utils.json_to_sheet(rows);
-    ws['!cols'] = [{ wch: 10 }, { wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 25 }];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'كشف الحساب');
-
-    const info = [
-      { 'البيان': 'اسم الموظف', 'القيمة': emp.name },
-      { 'البيان': 'رقم الإقامة', 'القيمة': emp.iqama },
-      { 'البيان': 'الجوال', 'القيمة': emp.phone || '-' },
-      { 'البيان': 'الوظيفة', 'القيمة': emp.position || '-' },
-      { 'البيان': 'القسم', 'القيمة': emp.department || '-' },
-      { 'البيان': 'الراتب', 'القيمة': emp.salary || '-' },
-      { 'البيان': 'تاريخ التوظيف', 'القيمة': emp.hireDate || '-' },
-      { 'البيان': '---', 'القيمة': '---' },
-      { 'البيان': 'تاريخ الكشف', 'القيمة': todayISO() },
-      { 'البيان': 'إجمالي السلف', 'القيمة': stats.adv },
-      { 'البيان': 'إجمالي المخصوم', 'القيمة': stats.ded },
-      { 'البيان': 'الرصيد المستحق', 'القيمة': stats.adv - stats.ded },
+    const mainCols = [
+      { wch: 13 }, { wch: 13 }, { wch: 28 }, { wch: 14 },
+      { wch: 14 }, { wch: 14 }, { wch: 22 },
     ];
-    const wsInfo = XLSX.utils.json_to_sheet(info);
-    wsInfo['!cols'] = [{ wch: 25 }, { wch: 30 }];
-    XLSX.utils.book_append_sheet(wb, wsInfo, 'بيانات الموظف');
+    const rowHeights = [];
+    rowHeights[0] = { hpt: 32 };
+    rowHeights[1] = { hpt: 20 };
+    for (let i = 2; i < 2 + headerInfo.length; i++) rowHeights[i] = { hpt: 20 };
+
+    const wsMain = buildSheet(mainRows, { cols: mainCols, rows: rowHeights, merges });
+
+    // ===== Sheet 2: الأقساط =====
+    const sheets = [{ name: 'كشف الحساب', ws: wsMain }];
 
     if (empInstallments.length > 0) {
-      const instRows = empInstallments.map((i) => ({
-        'القسط': `${i.installmentNo}/${i.totalInstallments}`,
-        'تاريخ الاستحقاق': i.dueDate,
-        'المبلغ': i.amount,
-        'الحالة': i.status === 'paid' ? 'مسدد' : 'معلق',
-        'تاريخ السداد': i.paidAt ? i.paidAt.slice(0, 10) : '',
-        'نوع الخصم': i.deductionType || '',
+      const instColsCount = 6;
+      const instRows = [];
+      const instInfo = [
+        ['اسم الموظف', emp.name],
+        ['عدد الأقساط', `${empInstallments.length} قسط`],
+        ['المعلقة', empInstallments.filter((i) => i.status !== 'paid').length],
+        ['المسددة', empInstallments.filter((i) => i.status === 'paid').length],
+      ];
+      instRows.push(...buildTitleBlock({
+        title: `📅 جدول الأقساط: ${emp.name}`,
+        subtitle: 'تفاصيل جميع الأقساط المرتبطة بالسلف',
+        info: instInfo,
+        colsCount: instColsCount,
       }));
-      const wsInst = XLSX.utils.json_to_sheet(instRows);
-      wsInst['!cols'] = [{ wch: 10 }, { wch: 16 }, { wch: 12 }, { wch: 10 }, { wch: 14 }, { wch: 20 }];
-      XLSX.utils.book_append_sheet(wb, wsInst, 'الأقساط');
+      const instMerges = titleBlockMerges({ colsCount: instColsCount, hasSubtitle: true, numInfoRows: instInfo.length });
+
+      // Headers
+      instRows.push([
+        cell('القسط', STYLES.th),
+        cell('تاريخ الاستحقاق', STYLES.th),
+        cell('نوع الخصم', STYLES.th),
+        cell('الحالة', STYLES.th),
+        cell('تاريخ السداد', STYLES.th),
+        cell('المبلغ', STYLES.th),
+      ]);
+
+      empInstallments.forEach((i, idx) => {
+        const alt = idx % 2 === 1;
+        const isPaid = i.status === 'paid';
+        instRows.push([
+          cell(`${i.installmentNo}/${i.totalInstallments}`, STYLES.tdCenter(alt)),
+          cell(fmtDate(i.dueDate), STYLES.date(alt)),
+          cell(i.deductionType || '-', STYLES.tdMuted(alt)),
+          cell(isPaid ? 'مسدد' : 'معلق', isPaid ? STYLES.badgeGreen : STYLES.badgeAmber),
+          cell(i.paidAt ? fmtDate(i.paidAt) : '-', STYLES.date(alt)),
+          cell(Number(i.amount), isPaid ? STYLES.numGreen(alt) : STYLES.numAmber(alt), true),
+        ]);
+      });
+
+      // Total installments
+      const totalInst = empInstallments.reduce((s, i) => s + Number(i.amount), 0);
+      const paidInst = empInstallments.filter((i) => i.status === 'paid').reduce((s, i) => s + Number(i.amount), 0);
+      const pendingInst = totalInst - paidInst;
+      instRows.push([
+        cell('', STYLES.totalLabel),
+        cell('', STYLES.totalLabel),
+        cell('', STYLES.totalLabel),
+        cell('المتبقي / الإجمالي', STYLES.totalLabel),
+        cell(`${fmt(pendingInst)} من ${fmt(totalInst)}`, STYLES.totalLabel),
+        cell(totalInst, STYLES.totalNum, true),
+      ]);
+
+      const instCols = [{ wch: 10 }, { wch: 16 }, { wch: 20 }, { wch: 12 }, { wch: 16 }, { wch: 14 }];
+      const instHeights = [];
+      instHeights[0] = { hpt: 30 };
+      instHeights[1] = { hpt: 20 };
+
+      const wsInst = buildSheet(instRows, { cols: instCols, rows: instHeights, merges: instMerges });
+      sheets.push({ name: 'الأقساط', ws: wsInst });
     }
 
-    XLSX.writeFile(wb, `كشف_${emp.name}_${todayISO()}.xlsx`);
+    exportWorkbook(sheets, `كشف_${emp.name.replace(/\s+/g, '_')}_${todayISO()}.xlsx`);
     showToast('تم تنزيل كشف الحساب');
   };
 
