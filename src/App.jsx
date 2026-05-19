@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import {
   collection, doc, deleteDoc, onSnapshot, writeBatch,
-  getDoc, updateDoc, setDoc, query, where, getDocs,
+  getDoc, updateDoc, setDoc, query, where, getDocs, limit,
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { Loader2 } from 'lucide-react';
