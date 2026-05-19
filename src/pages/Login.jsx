@@ -34,9 +34,20 @@ export default function Login() {
     }
     const emailLower = email.trim().toLowerCase();
 
-    // 1) Check if there's an invitation for this email
+    // STEP 1: Create the auth account FIRST.
+    // This is needed because Firestore rules require auth to read invitations.
+    let cred;
+    try {
+      cred = await createUserWithEmailAndPassword(auth, emailLower, password);
+    } catch (e) {
+      throw e; // bubble up auth errors
+    }
+    const uid = cred.user.uid;
+
+    // STEP 2: Now that we're authenticated, look for an invitation
     let invitationOrgId = null;
     let invitationData = null;
+    let invitationDocId = null;
     try {
       const invSnap = await getDocs(query(
         collection(db, 'invitations'),
@@ -47,37 +58,50 @@ export default function Login() {
         const invDoc = invSnap.docs[0];
         invitationData = invDoc.data();
         invitationOrgId = invitationData.orgId;
+        invitationDocId = invDoc.id;
       }
-    } catch (e) { console.warn('invitation check failed', e); }
+    } catch (e) {
+      console.error('Invitation lookup failed:', e);
+      // delete the newly created auth account since we can't proceed
+      try { await cred.user.delete(); } catch { /* ignore */ }
+      throw new Error('INV_READ_FAILED');
+    }
 
-    // 2) Create the user
-    const cred = await createUserWithEmailAndPassword(auth, emailLower, password);
-    const uid = cred.user.uid;
-
-    // 3) If there's an invitation -> attach to that org with assigned permissions
+    // STEP 3: If invitation found, link the user to the org
     if (invitationOrgId && invitationData) {
-      await setDoc(doc(db, 'userOrgMap', uid), {
-        orgId: invitationOrgId,
-        role: invitationData.role || 'member',
-        permissions: invitationData.permissions || [],
-        displayName: displayName.trim(),
-        email: emailLower,
-        createdAt: new Date().toISOString(),
-      });
-      // also add to members subcollection
-      await setDoc(doc(db, 'orgs', invitationOrgId, 'members', uid), {
-        uid,
-        email: emailLower,
-        displayName: displayName.trim(),
-        role: invitationData.role || 'member',
-        permissions: invitationData.permissions || [],
-        createdAt: new Date().toISOString(),
-      });
-      // delete the invitation
-      try { await deleteDoc(doc(db, 'invitations', invitationData.invId || emailLower)); }
-      catch { /* ignore */ }
+      try {
+        await setDoc(doc(db, 'userOrgMap', uid), {
+          orgId: invitationOrgId,
+          role: invitationData.role || 'member',
+          permissions: invitationData.permissions || [],
+          displayName: displayName.trim(),
+          email: emailLower,
+          isAdmin: invitationData.isAdmin || false,
+          createdAt: new Date().toISOString(),
+        });
+        await setDoc(doc(db, 'orgs', invitationOrgId, 'members', uid), {
+          uid,
+          email: emailLower,
+          displayName: displayName.trim(),
+          role: invitationData.role || 'member',
+          permissions: invitationData.permissions || [],
+          isAdmin: invitationData.isAdmin || false,
+          createdAt: new Date().toISOString(),
+        });
+        // delete the invitation
+        if (invitationDocId) {
+          try { await deleteDoc(doc(db, 'invitations', invitationDocId)); }
+          catch { /* ignore */ }
+        }
+        // success — App.jsx will detect the new profile
+      } catch (e) {
+        console.error('Org linking failed:', e);
+        try { await cred.user.delete(); } catch { /* ignore */ }
+        throw new Error('LINK_FAILED');
+      }
     } else {
-      // 4) No invitation -> REJECT the signup
+      // STEP 4: No invitation found — reject and delete the auth account
+      try { await cred.user.delete(); } catch { /* ignore */ }
       throw new Error('NO_INVITATION');
     }
   };
@@ -90,13 +114,19 @@ export default function Login() {
       if (mode === 'signin') await handleSignIn();
       else await handleSignUp();
     } catch (err) {
-      // Special case: no invitation
+      // Special cases
       if (err.message === 'NO_INVITATION') {
-        // Delete the auth account that was just created (since they shouldn't be in the system)
-        try {
-          if (auth.currentUser) await auth.currentUser.delete();
-        } catch { /* ignore */ }
-        setError('🚫 لا يمكن إنشاء حساب بهذا البريد. يجب أن يدعوك الأدمن أولاً. تواصل مع مدير النظام.');
+        setError('🚫 لا يوجد دعوة لهذا البريد. اطلب من الأدمن أن يدعوك أولاً بنفس البريد بالضبط.');
+        setLoading(false);
+        return;
+      }
+      if (err.message === 'INV_READ_FAILED') {
+        setError('⚠️ فشل التحقق من الدعوة. تأكد من إعدادات قاعدة البيانات أو تواصل مع الأدمن.');
+        setLoading(false);
+        return;
+      }
+      if (err.message === 'LINK_FAILED') {
+        setError('⚠️ فشل ربط حسابك بالمنشأة. تواصل مع الأدمن.');
         setLoading(false);
         return;
       }
@@ -107,7 +137,7 @@ export default function Login() {
         'auth/user-not-found': 'لا يوجد حساب بهذا البريد',
         'auth/wrong-password': 'كلمة السر خاطئة',
         'auth/invalid-credential': 'البريد أو كلمة السر غير صحيحة',
-        'auth/email-already-in-use': 'البريد مستخدم مسبقًا',
+        'auth/email-already-in-use': 'البريد مستخدم مسبقًا، سجّل دخول بدلاً من إنشاء حساب',
         'auth/weak-password': 'كلمة السر ضعيفة (6 أحرف على الأقل)',
         'auth/too-many-requests': 'محاولات كثيرة، حاول لاحقًا',
       };
